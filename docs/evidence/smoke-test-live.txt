@@ -1,0 +1,33 @@
+[5/5] Live smoke test (one full research run, ~2-3 min)
+GET  /               200  UI ok
+GET  /api/health     200  {"status":"ok","workflow":true}
+GET  /api/runs       403  (wrong key, expect 403)
+POST /api/runs       200  {"run_id":"f05cc33a4a44"}
+     0s planning     
+    12s researching  1:c 2:c 3:c 4:c 5:r 6:p 7:p 8:p
+    18s researching  1:c 2:c 3:c 4:c 5:c 6:r 7:r 8:p
+    24s researching  1:c 2:c 3:c 4:c 5:c 6:c 7:r 8:p
+    48s researching  1:c 2:c 3:c 4:c 5:c 6:c 7:c 8:r
+    60s writing      1:c 2:c 3:c 4:c 5:c 6:c 7:c 8:c
+    78s done         1:c 2:c 3:c 4:c 5:c 6:c 7:c 8:c
+
+run f05cc33a4a44: done in 73s, 27,194 tokens, $0.0087, confidence 0.82, attempts 1
+
+# NVIDIA vs. AMD vs. Intel – Revenue‑Growth, Profitability & Risk Overview
+
+**Confidence:** 82%
+
+## Executive summary
+NVIDIA (NVDA) is the clear growth and profitability leader, posting **+65.5 %** YoY revenue growth and a **60.4 %** operating margin. AMD delivers solid **+34.3 %** growth with a modest **10.7 %** operating margin, while Intel’s top line is flat (**‑0.5 %**) and it still records a **‑4.2 %** operating margin. All three firms face material head‑winds – NVIDIA from supply‑chain, export‑license and open‑source AI competition; AMD from intense price‑performance pressure, foundry dependence and customer concentration; Intel from a negative operating profile and a turnaround that has yet to translate into earnings improvement. The data set lacks P/E and market‑cap figures, so valuation is limited to a qualitative assessment.**
+
+## Key metrics
+| Ticker | Revenue ($M) | Revenue Growth (%) | Gross Margin (%) | Operating Margin (%) | EPS ($) | P/E | Market Cap |
+|--------|--------------|--------------------|------------------|----------------------|---------|-----|------------|
+| NVDA | 215,938.0 | 65.5 | 71.1 | 60.4 | 4.9 | n/a | n/a |
+| AMD | 34,639.0 | 34.3 | 49.5 | 10.7 | 2.65 | n/a | n/a |
+| INTC | 52,853.0 | -0.5 | 34.8 | -4.2 | -0.06 | n/a | n/a |
+
+## Competitive analysis
+**Revenue Growth**
+
+SMOKE TEST PASSED

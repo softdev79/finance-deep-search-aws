@@ -1,0 +1,286 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Finance Deep Search agent: Step Functions runs plan -> parallel research waves -> plain-code
+  validation -> re-plan (max 2) -> memo. Lambda workers call Bedrock (gpt-oss, role-signed token),
+  SEC EDGAR and Tavily; state in DynamoDB, artefacts in S3. $0 when idle.
+
+Parameters:
+  AppName:
+    Type: String
+    Default: finance-deep-search
+    AllowedPattern: "[a-z0-9-]{3,30}"
+  ModelLarge:
+    Type: String
+    Default: openai.gpt-oss-120b
+  ModelSmall:
+    Type: String
+    Default: openai.gpt-oss-20b
+  BedrockProjectId:
+    Type: String
+    Default: default
+  RunMaxTokens:
+    Type: Number
+    Default: 400000
+  BudgetEmail:
+    Type: String
+    Default: ""
+
+Conditions:
+  HasBudget: !Not [!Equals [!Ref BudgetEmail, ""]]
+
+Globals:
+  Function:
+    Runtime: python3.13
+    Architectures: [arm64]
+    Tracing: Active
+    Environment:
+      Variables:
+        RUNS_TABLE: !Ref RunsTable
+        CACHE_TABLE: !Ref CacheTable
+        ARTIFACTS_BUCKET: !Ref ArtifactsBucket
+        SECRETS_PREFIX: !Sub "/${AppName}/"
+        OPENAI_BASE_URL: !Sub "https://bedrock-mantle.${AWS::Region}.api.aws/v1"
+        OPENAI_PROJECT_ID: !Ref BedrockProjectId
+        MODEL_LARGE: !Ref ModelLarge
+        MODEL_SMALL: !Ref ModelSmall
+        RUN_MAX_TOKENS: !Ref RunMaxTokens
+
+Resources:
+  # ---------------------------------------------------------------- data
+  RunsTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Delete
+    Properties:
+      TableName: !Sub "${AppName}-runs"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions: [{ AttributeName: run_id, AttributeType: S }]
+      KeySchema: [{ AttributeName: run_id, KeyType: HASH }]
+      TimeToLiveSpecification: { AttributeName: expires_at, Enabled: true }
+
+  CacheTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Delete
+    Properties:
+      TableName: !Sub "${AppName}-cache"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions: [{ AttributeName: pk, AttributeType: S }]
+      KeySchema: [{ AttributeName: pk, KeyType: HASH }]
+      TimeToLiveSpecification: { AttributeName: expires_at, Enabled: true }
+
+  ArtifactsBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+    Properties:
+      BucketName: !Sub "${AppName}-runs-${AWS::AccountId}-${AWS::Region}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration: [{ ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 } }]
+      LifecycleConfiguration:
+        Rules: [{ Id: expire-runs, Status: Enabled, ExpirationInDays: 90 }]
+
+  # ---------------------------------------------------------------- workers
+  WorkerLogs:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    Properties: { LogGroupName: !Sub "/aws/lambda/${AppName}-worker", RetentionInDays: 7 }
+
+  WorkerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AppName}-worker"
+      CodeUri: build/
+      Handler: deepsearch.steps.handler
+      MemorySize: 1024
+      Timeout: 300
+      LoggingConfig: { LogGroup: !Ref WorkerLogs }
+      Policies:
+        - DynamoDBCrudPolicy: { TableName: !Ref RunsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref CacheTable }
+        - S3CrudPolicy: { BucketName: !Ref ArtifactsBucket }
+        - Statement:
+            - Sid: ReadSecrets
+              Effect: Allow
+              Action: ssm:GetParameters
+              Resource: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${AppName}/*"
+            - Sid: DecryptSecrets
+              Effect: Allow
+              Action: kms:Decrypt
+              Resource: "*"
+              Condition: { StringEquals: { "kms:ViaService": !Sub "ssm.${AWS::Region}.amazonaws.com" } }
+            - Sid: BedrockShortTermToken
+              Effect: Allow
+              Action: [bedrock:CallWithBearerToken, bedrock-mantle:CallWithBearerToken]
+              Resource: "*"
+            - Sid: BedrockMantleInference
+              Effect: Allow
+              Action: [bedrock-mantle:CreateInference, bedrock-mantle:GetInference, bedrock-mantle:GetModel, bedrock-mantle:ListModels]
+              Resource: !Sub "arn:${AWS::Partition}:bedrock-mantle:${AWS::Region}:${AWS::AccountId}:project/*"
+
+  ApiLogs:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    Properties: { LogGroupName: !Sub "/aws/lambda/${AppName}-api", RetentionInDays: 7 }
+
+  ApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AppName}-api"
+      CodeUri: build/
+      Handler: deepsearch.api.handler
+      MemorySize: 512
+      Timeout: 30
+      LoggingConfig: { LogGroup: !Ref ApiLogs }
+      Environment:
+        Variables:
+          STATE_MACHINE_ARN: !Sub "arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:stateMachine:${AppName}"
+          API_KEY_PARAM: !Sub "/${AppName}/api-key"
+      FunctionUrlConfig:
+        AuthType: NONE      # public page; /api/* checks X-API-Key in the app
+      Policies:
+        - DynamoDBCrudPolicy: { TableName: !Ref RunsTable }
+        - S3ReadPolicy: { BucketName: !Ref ArtifactsBucket }
+        - Statement:
+            - Sid: StartRuns
+              Effect: Allow
+              Action: states:StartExecution
+              Resource: !Sub "arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:stateMachine:${AppName}"
+            - Sid: ReadApiKey
+              Effect: Allow
+              Action: ssm:GetParameter
+              Resource: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${AppName}/api-key"
+            - Sid: DecryptApiKey
+              Effect: Allow
+              Action: kms:Decrypt
+              Resource: "*"
+              Condition: { StringEquals: { "kms:ViaService": !Sub "ssm.${AWS::Region}.amazonaws.com" } }
+
+  # Function URLs need both permissions since Oct 2025 (SAM adds InvokeFunctionUrl).
+  ApiPublicInvoke:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ApiFunction
+      Action: lambda:InvokeFunction
+      Principal: "*"
+      InvokedViaFunctionUrl: true
+
+  # ---------------------------------------------------------------- workflow
+  DeepSearchWorkflow:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Name: !Ref AppName
+      Type: STANDARD
+      Tracing: { Enabled: true }
+      Policies:
+        - LambdaInvokePolicy: { FunctionName: !Ref WorkerFunction }
+      DefinitionSubstitutions:
+        Worker: !GetAtt WorkerFunction.Arn
+      Definition:
+        Comment: "Deep search: plan -> research waves -> validate -> (re-plan | memo)"
+        StartAt: Plan
+        TimeoutSeconds: 900
+        States:
+          Plan:
+            Type: Task
+            Resource: "${Worker}"
+            Parameters: { step: plan, "run_id.$": "$.run_id", "attempt.$": "$.attempt", "feedback.$": "$.feedback" }
+            ResultPath: "$.plan"
+            Retry: [{ ErrorEquals: ["Lambda.ServiceException", "Lambda.TooManyRequestsException", "States.Timeout"], MaxAttempts: 2, BackoffRate: 2 }]
+            Catch: [{ ErrorEquals: ["States.ALL"], ResultPath: "$.error", Next: MarkFailed }]
+            Next: ResearchWaves
+          ResearchWaves:
+            Type: Map
+            ItemsPath: "$.plan.waves"
+            MaxConcurrency: 1          # waves run one after another
+            ItemSelector: { "run_id.$": "$.run_id", "attempt.$": "$.attempt", "wave.$": "$$.Map.Item.Value" }
+            ItemProcessor:
+              StartAt: Tasks
+              States:
+                Tasks:
+                  Type: Map
+                  ItemsPath: "$.wave"
+                  MaxConcurrency: 3    # tasks inside a wave run in parallel (account limit: 10 Lambdas)
+                  ItemSelector: { "run_id.$": "$.run_id", "attempt.$": "$.attempt", "task_id.$": "$$.Map.Item.Value" }
+                  ItemProcessor:
+                    StartAt: RunTask
+                    States:
+                      RunTask:
+                        Type: Task
+                        Resource: "${Worker}"
+                        Parameters: { step: task, "run_id.$": "$.run_id", "attempt.$": "$.attempt", "task_id.$": "$.task_id" }
+                        Retry: [{ ErrorEquals: ["Lambda.ServiceException", "Lambda.TooManyRequestsException"], MaxAttempts: 3, BackoffRate: 2 }]
+                        End: true
+                  End: true
+            ResultPath: null
+            Catch: [{ ErrorEquals: ["States.ALL"], ResultPath: "$.error", Next: MarkFailed }]
+            Next: Validate
+          Validate:
+            Type: Task
+            Resource: "${Worker}"
+            Parameters: { step: validate, "run_id.$": "$.run_id", "attempt.$": "$.attempt" }
+            ResultPath: "$.validation"
+            Catch: [{ ErrorEquals: ["States.ALL"], ResultPath: "$.error", Next: MarkFailed }]
+            Next: Decide
+          Decide:
+            Type: Choice
+            Choices: [{ Variable: "$.validation.decision", StringEquals: replan, Next: PrepareReplan }]
+            Default: Synthesize
+          PrepareReplan:
+            Type: Pass
+            Parameters: { "run_id.$": "$.run_id", "attempt.$": "$.validation.attempt", "feedback.$": "$.validation.feedback" }
+            Next: Plan
+          Synthesize:
+            Type: Task
+            Resource: "${Worker}"
+            Parameters: { step: synthesize, "run_id.$": "$.run_id", "attempt.$": "$.attempt" }
+            Retry: [{ ErrorEquals: ["Lambda.ServiceException", "Lambda.TooManyRequestsException"], MaxAttempts: 2, BackoffRate: 2 }]
+            Catch: [{ ErrorEquals: ["States.ALL"], ResultPath: "$.error", Next: MarkFailed }]
+            End: true
+          MarkFailed:
+            Type: Task
+            Resource: "${Worker}"
+            Parameters: { step: fail, "run_id.$": "$.run_id", "error.$": "$.error" }
+            Next: Failed
+          Failed:
+            Type: Fail
+            Error: ResearchRunFailed
+
+  # ---------------------------------------------------------------- ops
+  FailedRunsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${AppName}-failed-runs"
+      Namespace: AWS/States
+      MetricName: ExecutionsFailed
+      Dimensions: [{ Name: StateMachineArn, Value: !Ref DeepSearchWorkflow }]
+      Statistic: Sum
+      Period: 3600
+      EvaluationPeriods: 1
+      Threshold: 2
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+  MonthlyBudget:
+    Type: AWS::Budgets::Budget
+    Condition: HasBudget
+    Properties:
+      Budget:
+        BudgetName: !Sub "${AppName}-monthly"
+        BudgetType: COST
+        TimeUnit: MONTHLY
+        BudgetLimit: { Amount: 5, Unit: USD }
+      NotificationsWithSubscribers:
+        - Notification: { NotificationType: ACTUAL, ComparisonOperator: GREATER_THAN, Threshold: 20, ThresholdType: PERCENTAGE }
+          Subscribers: [{ SubscriptionType: EMAIL, Address: !Ref BudgetEmail }]
+
+Outputs:
+  AppUrl:
+    Value: !GetAtt ApiFunctionUrl.FunctionUrl
+  StateMachineArn:
+    Value: !Ref DeepSearchWorkflow
+  ArtifactsBucketName:
+    Value: !Ref ArtifactsBucket

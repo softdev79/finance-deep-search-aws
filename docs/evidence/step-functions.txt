@@ -1,0 +1,5 @@
+Live execution (us-east-2, Standard workflow), NVDA/AMD/INTC course question:
+  status SUCCEEDED, 1 attempt (validator passed first time)
+  states entered: 17 (Plan, 2 Map states x waves, 12 RunTask, Validate, Decide, Synthesize)
+  ~30-35 billable state transitions per run -> ~120 runs/month inside the 4,000 free transitions
+Final deployment run: 73 s, 27,194 tokens, $0.0087, confidence 0.82

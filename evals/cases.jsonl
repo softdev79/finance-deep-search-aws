@@ -1,0 +1,6 @@
+{"id": "ai-chips", "question": "Analyze NVIDIA's financial performance and competitive position in the AI chip market. Compare with AMD and Intel on revenue growth, profitability, and key risk factors. Produce a structured investment research memo.", "tickers": ["NVDA", "AMD", "INTC"]}
+{"id": "big-tech", "question": "Compare Apple and Microsoft on revenue growth, margins and the main risks in their latest annual reports.", "tickers": ["AAPL", "MSFT"]}
+{"id": "beverages", "question": "Coca-Cola vs PepsiCo: which business is more profitable and what risks do they face?", "tickers": ["KO", "PEP"]}
+{"id": "banks", "question": "Compare JPMorgan Chase and Bank of America on growth and key risk factors.", "tickers": ["JPM", "BAC"]}
+{"id": "autos", "question": "Compare Tesla and Ford on revenue growth, profitability and the risks to their EV strategies.", "tickers": ["TSLA", "F"]}
+{"id": "retail", "question": "Amazon versus Walmart: growth, margins and key risks for an equity analyst.", "tickers": ["AMZN", "WMT"]}

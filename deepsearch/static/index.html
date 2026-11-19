@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Finance Deep Search</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --text:#1b2330; --muted:#5f6b7a; --line:#dde2ea; --accent:#1f5bd8;
+          --ok:#1d7a46; --run:#b7791f; --bad:#b42318; --pend:#8a94a3; --chip:#eef2f8; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#0f1318; --card:#171c23; --text:#e6eaf0; --muted:#98a3b3;
+          --line:#2a313b; --accent:#7096ff; --ok:#4cc38a; --run:#e0a84a; --bad:#ff8a7a; --pend:#7d8796; --chip:#1f2630; } }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.55 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--text); }
+  header { display:flex; gap:12px; align-items:center; flex-wrap:wrap; padding:12px 16px; background:var(--card); border-bottom:1px solid var(--line); }
+  header h1 { font-size:17px; margin:0; flex:1; min-width:220px; }
+  header small { color:var(--muted); font-weight:normal; }
+  main { max-width:1180px; margin:0 auto; padding:16px; display:grid; grid-template-columns:300px 1fr; gap:16px; }
+  @media (max-width:860px) { main { grid-template-columns:1fr; } }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px; min-width:0; }
+  h2 { font-size:14px; margin:0 0 8px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); }
+  input, textarea, button { font:inherit; color:var(--text); background:var(--card); border:1px solid var(--line); border-radius:8px; padding:8px 10px; width:100%; }
+  textarea { min-height:96px; resize:vertical; }
+  label { display:block; font-size:13px; color:var(--muted); margin:10px 0 4px; }
+  button { background:var(--accent); border-color:var(--accent); color:#fff; cursor:pointer; margin-top:10px; }
+  button:disabled { opacity:.6; cursor:wait; }
+  .hist { list-style:none; padding:0; margin:0; }
+  .hist li { padding:7px 0; border-bottom:1px solid var(--line); cursor:pointer; font-size:13px; }
+  .hist li:hover { color:var(--accent); }
+  .meta { color:var(--muted); font-size:12px; }
+  .status { display:inline-block; padding:2px 8px; border-radius:99px; font-size:12px; background:var(--chip); }
+  .waves { display:flex; gap:10px; overflow-x:auto; padding-bottom:4px; }
+  .wave { min-width:190px; flex:1; }
+  .wave h3 { font-size:12px; color:var(--muted); margin:0 0 6px; font-weight:600; }
+  .task { border:1px solid var(--line); border-left:4px solid var(--pend); border-radius:8px; padding:7px 9px; margin-bottom:8px; font-size:13px; }
+  .task.running { border-left-color:var(--run); } .task.completed { border-left-color:var(--ok); } .task.failed { border-left-color:var(--bad); }
+  .task .src { font-size:11px; color:var(--muted); }
+  .err { color:var(--bad); font-size:12px; overflow-wrap:anywhere; }
+  .stats { display:flex; gap:14px; flex-wrap:wrap; margin:8px 0 12px; font-size:13px; }
+  .stats b { font-variant-numeric:tabular-nums; }
+  .memo table { border-collapse:collapse; width:100%; font-size:13px; display:block; overflow-x:auto; }
+  .memo th, .memo td { border:1px solid var(--line); padding:5px 8px; text-align:right; white-space:nowrap; }
+  .memo th:first-child, .memo td:first-child { text-align:left; }
+  .memo h1 { font-size:20px; } .memo h2 { font-size:15px; text-transform:none; letter-spacing:0; color:var(--text); margin-top:18px; }
+  .memo a { color:var(--accent); overflow-wrap:anywhere; }
+  .attempt { font-size:13px; margin:4px 0; }
+  .empty { color:var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Finance Deep Search <small>· plan → research waves → validate → memo · Step Functions + Lambda + Bedrock</small></h1>
+  <input id="apikey" type="password" placeholder="API key" autocomplete="off" style="max-width:220px">
+</header>
+<main>
+  <section>
+    <div class="card">
+      <h2>New research</h2>
+      <form id="form">
+        <label for="q">Question</label>
+        <textarea id="q" maxlength="1000">Compare NVIDIA with AMD and Intel on revenue growth, profitability and key risk factors. Produce a structured investment research memo.</textarea>
+        <label for="tk">Tickers (up to 3)</label>
+        <input id="tk" value="NVDA, AMD, INTC" autocomplete="off">
+        <button id="go">Start research</button>
+      </form>
+      <p class="meta">Data: SEC EDGAR (financials, 10-K risk factors), Tavily news. A run takes about 2 minutes.</p>
+    </div>
+    <div class="card" style="margin-top:16px">
+      <h2>History</h2>
+      <ul class="hist" id="hist"><li class="empty">Enter the API key to load runs.</li></ul>
+    </div>
+  </section>
+  <section class="card" id="view">
+    <p class="empty">Start a research run or pick one from the history.</p>
+  </section>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const store = { get(k){ try { return sessionStorage.getItem(k); } catch { return null; } },
+                set(k,v){ try { sessionStorage.setItem(k,v); } catch {} } };
+$("apikey").value = store.get("apikey") || "";
+$("apikey").addEventListener("change", () => { store.set("apikey", $("apikey").value.trim()); loadHistory(); });
+let timer = null;
+
+async function api(path, opts = {}) {
+  const res = await fetch("/api" + path, { ...opts, headers: { "X-API-Key": $("apikey").value.trim(),
+    ...(opts.body ? { "Content-Type": "application/json" } : {}) } });
+  const text = await res.text();
+  let data; try { data = JSON.parse(text); } catch { data = { detail: text }; }
+  if (!res.ok) throw new Error(`${res.status}: ${typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail)}`);
+  return data;
+}
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
+const when = (t) => t ? new Date(t * 1000).toLocaleString() : "";
+
+async function loadHistory() {
+  if (!$("apikey").value.trim()) return;
+  try {
+    const runs = await api("/runs");
+    $("hist").innerHTML = runs.length ? runs.map(r => `<li data-id="${esc(r.run_id)}">
+      <span class="status">${esc(r.status)}</span> ${esc((r.tickers || []).join(", "))}
+      <div class="meta">${esc(r.question).slice(0, 80)}… · ${when(r.created_at)}</div></li>`).join("")
+      : `<li class="empty">No runs yet.</li>`;
+    document.querySelectorAll("#hist li[data-id]").forEach(li => li.onclick = () => show(li.dataset.id));
+  } catch (e) { $("hist").innerHTML = `<li class="err">${esc(e.message)}</li>`; }
+}
+
+$("form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const tickers = $("tk").value.split(/[\s,]+/).filter(Boolean);
+  $("go").disabled = true;
+  try {
+    const r = await api("/runs", { method: "POST", body: JSON.stringify({ question: $("q").value.trim(), tickers }) });
+    show(r.run_id); loadHistory();
+  } catch (err) { $("view").innerHTML = `<p class="err">${esc(err.message)}</p>`; }
+  finally { $("go").disabled = false; }
+});
+
+function waves(tasks) {
+  const ids = Object.keys(tasks).map(Number), done = new Set(), out = [];
+  let left = new Set(ids);
+  while (left.size) {
+    const ready = [...left].filter(id => (tasks[id].deps || []).every(d => done.has(d)));
+    if (!ready.length) { out.push([...left]); break; }
+    out.push(ready.sort((a,b) => a-b)); ready.forEach(id => { done.add(id); left.delete(id); });
+  }
+  return out;
+}
+
+function md(src) {   // tiny Markdown renderer: headings, bold/italic, lists, tables, links
+  const lines = esc(src).split("\n"), out = []; let i = 0;
+  const inline = (s) => s.replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/(^|\W)_(.+?)_(\W|$)/g, "$1<i>$2</i>$3")
+                         .replace(/(https?:\/\/[^\s)<]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>');
+  while (i < lines.length) {
+    const l = lines[i];
+    if (/^\s*\|/.test(l)) {
+      const rows = []; while (i < lines.length && /^\s*\|/.test(lines[i])) rows.push(lines[i++]);
+      const cells = (r) => r.trim().replace(/^\||\|$/g, "").split("|").map(c => inline(c.trim()));
+      const body = rows.filter(r => !/^\s*\|[\s:|-]+\|\s*$/.test(r));
+      out.push("<table><tr>" + cells(body[0]).map(c => `<th>${c}</th>`).join("") + "</tr>" +
+        body.slice(1).map(r => "<tr>" + cells(r).map(c => `<td>${c}</td>`).join("") + "</tr>").join("") + "</table>");
+      continue;
+    }
+    if (/^#{1,3} /.test(l)) { const n = l.match(/^#+/)[0].length; out.push(`<h${n}>${inline(l.slice(n + 1))}</h${n}>`); }
+    else if (/^\s*[-*] /.test(l)) { const items = []; while (i < lines.length && /^\s*[-*] /.test(lines[i])) items.push(`<li>${inline(lines[i++].replace(/^\s*[-*] /, ""))}</li>`); out.push(`<ul>${items.join("")}</ul>`); continue; }
+    else if (l.trim()) out.push(`<p>${inline(l)}</p>`);
+    i++;
+  }
+  return out.join("");
+}
+
+async function show(id) {
+  clearTimeout(timer);
+  let r;
+  try { r = await api("/runs/" + encodeURIComponent(id)); }
+  catch (e) { $("view").innerHTML = `<p class="err">${esc(e.message)}</p>`; return; }
+  const tasks = r.tasks || {};
+  const board = Object.keys(tasks).length ? `<div class="waves">` + waves(tasks).map((w, n) =>
+    `<div class="wave"><h3>Wave ${n + 1}</h3>` + w.map(id => { const t = tasks[id]; return `
+      <div class="task ${esc(t.status)}"><b>${id}.</b> ${esc(t.description)}
+        <div class="src">${esc((t.sources && t.sources.length ? t.sources.join(", ") : "LLM analysis"))} · ${esc((t.tickers || []).join(", "))} · ${esc(t.status)}</div>
+        ${t.error ? `<div class="err">${esc(t.error)}</div>` : ""}</div>`; }).join("") + `</div>`).join("") + `</div>` : "";
+  const attempts = (r.attempts || []).map(a => `<div class="attempt">Attempt ${a.attempt + 1}: validator
+      <b>${a.is_valid ? "passed" : "found problems"}</b>${(a.gaps || []).concat(a.errors || []).map(x => `<div class="err">• ${esc(x)}</div>`).join("")}
+      ${(a.warnings || []).map(x => `<div class="meta">⚠ ${esc(x)}</div>`).join("")}</div>`).join("");
+  const running = !["done", "failed"].includes(r.status);
+  $("view").innerHTML = `
+    <h2>${esc((r.tickers || []).join(" · "))}</h2>
+    <div>${esc(r.question)}</div>
+    <div class="stats"><span>Status <span class="status">${esc(r.status)}</span></span>
+      <span>Attempt <b>${(r.attempt || 0) + 1}</b></span>
+      <span>Tokens <b>${((r.input_tokens || 0) + (r.output_tokens || 0)).toLocaleString()}</b></span>
+      <span>Cost <b>$${Number(r.cost_usd || 0).toFixed(4)}</b></span>
+      ${r.confidence != null ? `<span>Confidence <b>${Math.round(r.confidence * 100)}%</b></span>` : ""}
+      ${r.finished_at ? `<span>Took <b>${r.finished_at - r.created_at}s</b></span>` : ""}</div>
+    ${r.error ? `<p class="err">${esc(r.error)}</p>` : ""}
+    ${board}${attempts}
+    <div class="memo">${r.memo_md ? md(r.memo_md) : (running ? '<p class="meta">Memo appears here when the run finishes…</p>' : "")}</div>`;
+  if (running) timer = setTimeout(() => show(id), 2500);
+  else loadHistory();
+}
+loadHistory();
+</script>
+</body>
+</html>

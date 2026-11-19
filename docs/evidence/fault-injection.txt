@@ -1,0 +1,4 @@
+--fault drop_ticker -> exit 2 (BLOCK)
+--fault wrong_units -> exit 2 (BLOCK)
+--fault fake_source -> exit 2 (BLOCK)
+--fault invent_pe -> exit 2 (BLOCK)

@@ -1,0 +1,4 @@
+-r requirements-lambda.txt
+boto3
+botocore[crt]   # lets boto3 use `aws login` sessions locally
+pytest
