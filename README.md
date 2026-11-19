@@ -26,6 +26,14 @@ Browser ─▶ Lambda Function URL "api" (X-API-Key) ─▶ StartExecution ─�
 SSM Parameter Store (keys) · CloudWatch + X-Ray · alarm on failed executions · AWS Budgets
 ```
 
+## Screenshot
+
+The live app on AWS: a finished NVIDIA vs AMD vs Intel run. The task board shows the plan as three waves (five
+data tasks in parallel, then the comparison and risk synthesis, then the memo draft), the validator passed on the
+first attempt, and the memo's metrics table matches SEC EDGAR. This run: 58,299 tokens, $0.0207, 159 s.
+
+![Finance Deep Search: live run with the task board, validator verdict and memo](docs/evidence/live-ui.png)
+
 ## What I added on top of the course code
 
 | Area | Course (Section 5) | This project |
